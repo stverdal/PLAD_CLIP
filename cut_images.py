@@ -40,6 +40,13 @@ def crop_images(annotation_file, image_folder, output_folder):
             print(f"Image file {image_path} not found")
             break
         
+        # Get the category name
+        category_name = None
+        for category in categories:
+            if category['id'] == category_id:
+                category_name = category['name']
+                break
+
         # Define the bounding box coordinates
         left, upper, width, height = bbox
         right = left + width
@@ -56,6 +63,7 @@ def crop_images(annotation_file, image_folder, output_folder):
         cropped_annotations.append({
             'image_id': annotation['id'],
             'category_id': category_id,
+            'category_name': category_name,
             'original_image': image_name,
             'file_name': f'cropped_image_{annotation["id"]}.jpg'
         })
