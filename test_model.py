@@ -10,12 +10,14 @@ from torch.utils.data import Dataset
 
 import clip
 from transformers import CLIPProcessor, CLIPModel
-from torchvision import transforms
+
 annotation_path = "./cropped_images/cropped_annotations.json"
 input_data = []
 image_dir = "./cropped_images/"
 
 categories = ["tower","insulator","spacer","damper","plate"]
+
+indices = [0,2,10,12,14,21,23,25,32]
 
 def split_dataset(image_list, label_list, ratio=0.8):
     #Assert that lists are equal length
@@ -40,25 +42,18 @@ def split_dataset(image_list, label_list, ratio=0.8):
 class plad_label_dataset():
     def __init__(self, list_image_path,list_labels):
         self.image_path = list_image_path
-        self.label = list_labels
-        self.transform = transforms.Compose([
-            transforms.Resize((224,224)),
-            #transforms.ToTensor()
-        ])
+        #self.label = list_labels
 
         #print(list_labels)
-        #print(list_labels)
-        #self.label = clip.tokenize(list_labels)
-        #print(self.label)
+        self.label = clip.tokenize(list_labels)
 
     def __len__(self):
         return len(self.label)
 
     def __getitem__(self,idx):
         image = preprocess(Image.open(self.image_path[idx]))
-        #print(idx)
-        label = categories.index(self.label[idx])
-        #print(label)
+        print(idx)
+        label = self.label[idx]
         return image, label
 
 
@@ -91,8 +86,6 @@ for annotation in annotations:
 
 image_list_train, image_list_val, label_list_train, label_list_val = split_dataset(image_path_list, label_list, ratio=0.8)
 
-#print(len(image_list_train),len(image_list_val),len(label_list_train), len(label_list_val))
-#print(label_list_train)
 #print(image_list_train)
 train_loader = DataLoader(plad_label_dataset(image_list_train, label_list_train), batch_size=32, shuffle=True)
 val_loader = DataLoader(plad_label_dataset(image_list_val, label_list_val), batch_size=32, shuffle=True)
@@ -105,51 +98,42 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
 #model.to(device)
 
+
+text_inputs = torch.cat([clip.tokenize(f'a picture of a powerline {c}') for c in categories]).to(device)
+
 #Instantiate fine tuning model
-num_classes = len(categories)
-model_ft = CLIPFineTuner(model, num_classes).to(device)
-
+model.to(device)
 #Define loss function and optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model_ft.classifier.parameters(), lr=1e-4)
 
 
-num_epochs = 100
+for i,idx in enumerate(indices):
+    #print(idx)
 
-for epoch in range(num_epochs):
-    model_ft.train()
-    running_loss = 0.0
-    pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}, :Loss: 0.0000")
+    #print(image_list_val[idx])
 
-    for images, labels in pbar:
-        #print(images)
-        #print(labels)
-        images, labels = images.to(device), labels.to(device)
-        optimizer.zero_grad()
-        outputs = model_ft(images)
-        #print("OUTPUTS",outputs)
-        #print("LABELS", len(labels[0]))
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+    #SQUEEZE?
+    pil_image = Image.open(image_list_val[idx]
+                           )
+    image = preprocess(pil_image).unsqueeze(0).to(device)
 
-        running_loss += loss.item()
-        pbar.set_description(f"Epoch {epoch+1}/{num_epochs}, Loss: {running_loss/len(train_loader):.4f}")
-
-    print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader):.4f}')
-
-    model_ft.eval()
-    correct = 0
-    total = 0
+    #print(image)
+    label = label_list_val[idx]
+    #print(label)
 
     with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model_ft(images)
-            _, predicted = torch.max(outputs.data,1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    print(f'Validation accuracy: {100 * correct / total}%')
+        image_features = model.encode_image(image)
+        text_features = model.encode_text(text_inputs)
+
+    image_features /= image_features.norm(dim=-1, keepdim=True)
+    text_features /= text_features.norm(dim=-1, keepdim=True)
 
 
-torch.save(model_ft.state_dict(), 'clip_finetuned.pth')
+    #print(image_features)
+    #print(text_features)
+
+
+    similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)
+    values,indices = similarity[0].topk(1)
+
+    print("Similarity", similarity)
+    print(f"Predicted {categories[indices[0]]}, ACtual {label}")
